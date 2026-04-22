@@ -33,8 +33,10 @@ bool lastStateTimeToggle = HIGH;
 bool useTime = false;       
 bool useSubtract = false;
 
-void handleButton(int pin, int value, bool &last, long &target, bool useSubtract);
-void handleToggle(int pin, bool &last, bool &flag, const char* label);
+bool onPress(int pin, bool &last);
+void waitRelease(int pin, bool &last);
+void increment(long &target, int value);
+void toggle(bool &flag);
 void saveState();
 void loadState();
 void updateDisplay();
@@ -68,53 +70,94 @@ void setup() {
 }
 
 void loop() {
-  long &target = useTime ? timeBalance : balance;
+  // determine target counter based on mode.
+  // declare as an alias reference to point back to actual counters
+  long &target = useTime ? timeBalance : balance; 
 
-  if (onPress(button1, lastState1)) increment(target, useTime ? 15 : 1);
-  if (onPress(button2, lastState2)) increment(target, useTime ? 60 : 5);
-  if (onPress(button3, lastState3)) increment(target, useTime ? 300 : 25);
+  // loop follows this logic for each button:
+  // 1. check for press event (edge detection)
+  // 2. call action functions
+  // 3. wait for release and handle debouncing
 
+  if (onPress(button1, lastState1)) {
+    increment(target, useTime ? 15 : 1); // increment by 15 minutes or $0.01 depending on mode
+    waitRelease(button1, lastState1);
+  }
+  if (onPress(button2, lastState2)) {
+    increment(target, useTime ? 60 : 5); // 1 hr or $0.05
+    waitRelease(button2, lastState2);
+  }
+  if (onPress(button3, lastState3)) {
+    increment(target, useTime ? 300 : 25); // 5 hr or $0.25
+    waitRelease(button3, lastState3);
+  }
+
+  // this block only executes for money mode. the buttons have special functions in time mode that are handled in the else case
   if (!useTime) {
-    if (onPress(button4, lastState4)) increment(balance, 100);
-    if (onPress(button5, lastState5)) increment(balance, 500);
-    if (onPress(button6, lastState6)) increment(balance, 2000);
-    if (onPress(button7, lastState7)) increment(balance, 10000);
+    if (onPress(button4, lastState4)) {
+      increment(balance, 100); // $1.00
+      waitRelease(button4, lastState4);
+    }
+    if (onPress(button5, lastState5)) {
+      increment(balance, 500); // $5.00
+      waitRelease(button5, lastState5);
+    }
+    if (onPress(button6, lastState6)) {
+      increment(balance, 2000); // $20.00
+      waitRelease(button6, lastState6);
+    }
+    if (onPress(button7, lastState7)) {
+      increment(balance, 10000); // $100.00
+      waitRelease(button7, lastState7);
+    }
   } else {
     // time mode special functions for buttons 4-7
   }
 
-  if (onPress(buttonSubToggle, lastStateSubToggle)) toggle(useSubtract, "Subtract");
-  if (onPress(buttonTimeToggle, lastStateTimeToggle)) toggle(useTime, "Time");
+  if (onPress(buttonSubToggle, lastStateSubToggle)) { // toggle subtract mode
+    toggle(useSubtract);
+    waitRelease(buttonSubToggle, lastStateSubToggle);
+  }
+  if (onPress(buttonTimeToggle, lastStateTimeToggle)) { // toggle time mode
+    toggle(useTime);
+    waitRelease(buttonTimeToggle, lastStateTimeToggle);
+  }
 }
 
 
-bool onPress(int pin, bool &last) {
+bool onPress(int pin, bool &last) { 
+  /// Return true when button is pressed to trigger actions in loop
   bool current = digitalRead(pin);
-  if (current == LOW && last == HIGH) {
-    delay(DEBOUNCE_MS);
-    while (digitalRead(pin) == LOW);
-    delay(DEBOUNCE_MS);
-    last = HIGH;
+  if (current == LOW && last == HIGH) { // edge detection for press
     return true;
   }
-  last = current;
+  last = current; // update last state (function is constantly called in loop)
   return false;
 }
 
+void waitRelease(int pin, bool &last) {
+  /// Wait for button release and handle debouncing. Called after a button press is detected
+  delay(DEBOUNCE_MS);
+  while (digitalRead(pin) == LOW); // wait for button release
+  delay(DEBOUNCE_MS);
+  last = HIGH; // force update of last state to HIGH, just in case of debounce oddities
+}
+
+
 void increment(long &target, int value) {
-  target += useSubtract ? -value : value;
-  if (target < 0) target = 0;
-  Serial.println(target);
-  saveState();
+  /// Increment or decrement target counter by given value.
+  target += useSubtract ? -value : value; 
+  if (target < 0) target = 0; // prevent negative values
+  saveState(); // save new value to EEPROM after every change
+  updateDisplay(); // refresh display to show new value
+}
+
+void toggle(bool &flag) {
+  // Toggle a boolean flag and refresh display.
+  flag = !flag;
   updateDisplay();
 }
 
-void toggle(bool &flag, const char* label) {
-  flag = !flag;
-  Serial.print(label);
-  Serial.println(flag ? ": ON" : ": OFF");
-  updateDisplay();
-}
 void saveState() { // save state into EEPROM
   EEPROM.put(BALANCE_ADDR, balance); // EEPROM.put only writes when value has changed 
   EEPROM.put(TIME_ADDR, timeBalance); // this helps reduce likelihood of reaching the rated 100000 write cycles
