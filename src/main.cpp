@@ -2,13 +2,35 @@
 #include <LiquidCrystal_I2C.h>
 #include <EEPROM.h>
 #include <RTClib.h>
-#define BALANCE_ADDR 0 // address for storing balance in EEPROM
-#define TIME_ADDR    4 // address for storing time in EEPROM
+
+// EEPROM addresses
+#define BALANCE_ADDR 0 
+#define TIME_ADDR    4 
+#define SHIFT_COUNT_ADDR 8 
+#define SHIFTS_START_ADDR 10
+
+// CURRENT EEPROM ALLOCATION:
+// 0-3: balance (long, 4 bytes)
+// 4-7: timeBalance (long, 4 bytes)
+// 8-9: shiftCount (int, 2 bytes)
+// 10-609: shift (struct (3 longs), 12 bytes, 50 entries allocated)
+// 610-1023: unused (414 bytes free)
+
+#define MAX_SHIFTS 50
 #define DEBOUNCE_MS 50
+
 
 // create objects to represent LCD and RTC modules, with appropriate parameters and I2C addresses
 LiquidCrystal_I2C lcd(0x27, 16, 2); 
 RTC_DS3231 rtc;
+
+// custom struct for shift data to be stored in EEPROM
+struct Shift {
+  long balance;
+  long time;
+  long timestamp;
+};
+
 
 long balance = 0; // long: 4-byte integer (up to +- 2 million)
 long timeBalance = 0;
@@ -32,6 +54,7 @@ bool lastStateSubToggle = HIGH;
 bool lastStateTimeToggle = HIGH;
 bool useTime = false;       
 bool useSubtract = false;
+int shiftCount = 0;
 
 bool onPress(int pin, bool &last);
 void waitRelease(int pin, bool &last);
@@ -40,6 +63,8 @@ void toggle(bool &flag);
 void saveState();
 void loadState();
 void updateDisplay();
+void saveShift();
+
 
 void setup() {
   pinMode(button1, INPUT_PULLUP); // pull-up resistor logic - HIGH when not pressed, LOW when pressed
@@ -110,8 +135,12 @@ void loop() {
       increment(balance, 10000); // $100.00
       waitRelease(button7, lastState7);
     }
-  } else {
+  }else {
     // time mode special functions for buttons 4-7
+    if (onPress(button4, lastState4)) { 
+      saveShift(); // complicated function, described in its own definition below
+      waitRelease(button4, lastState4);
+    }
   }
 
   if (onPress(buttonSubToggle, lastStateSubToggle)) { // toggle subtract mode
@@ -153,20 +182,24 @@ void increment(long &target, int value) {
 }
 
 void toggle(bool &flag) {
-  // Toggle a boolean flag and refresh display.
+  /// Toggle a boolean flag and refresh display.
   flag = !flag;
   updateDisplay();
 }
 
-void saveState() { // save state into EEPROM
+void saveState() { 
+  /// Save state of counters into EEPROM.
   EEPROM.put(BALANCE_ADDR, balance); // EEPROM.put only writes when value has changed 
   EEPROM.put(TIME_ADDR, timeBalance); // this helps reduce likelihood of reaching the rated 100000 write cycles
 }
 
-void loadState() { // load state into EEPROM
+void loadState() { 
+  /// Load state from EEPROM into variables.
   EEPROM.get(BALANCE_ADDR, balance);
   EEPROM.get(TIME_ADDR, timeBalance);
-  // sanity check / workaround for default uninitialized EEPROM value of 0xFF
+  EEPROM.get(SHIFT_COUNT_ADDR, shiftCount);
+
+  // sanity checks - uninitalized EEPROM may contain garbage values, so we set any out-of-range values to 0 to prevent issues
   if (balance < 0) {
     balance = 0;
     EEPROM.put(BALANCE_ADDR, balance);
@@ -175,10 +208,16 @@ void loadState() { // load state into EEPROM
     timeBalance = 0;
     EEPROM.put(TIME_ADDR, timeBalance);
   }
+  if (shiftCount < 0 || shiftCount >= MAX_SHIFTS + 1) { 
+    shiftCount = 0;
+    EEPROM.put(SHIFT_COUNT_ADDR, shiftCount);
+  }
+
 }
 
 void updateDisplay() {
 // LCD display update function - called after every state change to reflect new values
+// Only for standard display - other screens handeled in other functions
   lcd.clear();
   lcd.setCursor(0, 0);
   if (useTime) {
@@ -196,4 +235,73 @@ void updateDisplay() {
   }
   lcd.setCursor(0, 1);
   if (useSubtract) lcd.print("SUBTRACT");
+}
+
+void saveShift() {
+  // Prompt user to save shift. Write appropiate data to EEPROM if they confirm.
+
+  // confirm/cancel prompt
+  lcd.clear();
+  lcd.print("+/-: Confirm");
+  lcd.setCursor(0, 1);
+  lcd.print("Time: Cancel");
+  
+  // sit in loop until user makes a choice
+  while (true) {
+
+    // confirmation block - save shift and reset counters
+    if (onPress(buttonSubToggle, lastStateSubToggle)) {
+      waitRelease(buttonSubToggle, lastStateSubToggle);
+      
+      // memory full check, printout and exit if appropiate
+      if (shiftCount >= MAX_SHIFTS) {
+        lcd.clear();
+        lcd.print("Memory full!");
+        delay(2500);
+        updateDisplay(); // return to main display and exit function
+        return;
+      }
+
+      // create shift struct and write to EEPROM
+      DateTime now = rtc.now(); // pull time as DataTime object from the RTC module
+      // create shift struct with current balance, time, and timestamp (converted to unix time for storage)
+      Shift newShift = {balance, timeBalance, now.unixtime()};
+      // write new shift to EEPROM at the next available shift slot
+      // we start at the shift start address, then add the number of shifts already stored multiplied by each one's size (in bytes)
+      // this will give us the next valid address
+      EEPROM.put(SHIFTS_START_ADDR + shiftCount * sizeof(Shift), newShift);
+      shiftCount++; // increment shift count
+      EEPROM.put(SHIFT_COUNT_ADDR, shiftCount); // update shift count in EEPROM
+      balance = 0; // reset counters after saving shift
+      timeBalance = 0;  
+      saveState(); // save reset state to EEPROM
+
+      // confirmation printout
+      lcd.clear();
+      lcd.print("Shift saved!");
+      delay(2500);
+
+      // refresh display and leave function
+      updateDisplay();
+      return;
+    }
+
+    // cancellation block - just return to main display and exit function
+    if (onPress(buttonTimeToggle, lastStateTimeToggle)) {
+      waitRelease(buttonTimeToggle, lastStateTimeToggle);
+
+      // cancellation printout
+      lcd.clear();
+      lcd.print("Cancelled");
+      delay(2500);
+
+      // refresh and exit
+      updateDisplay();
+      return;
+    }
+    // still in while loop - update last states for toggle button before next iteration
+    lastStateSubToggle = digitalRead(buttonSubToggle);
+    lastStateTimeToggle = digitalRead(buttonTimeToggle);
+  }
+
 }
