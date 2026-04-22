@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "author": "Anonymous maker",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-arduino-uno", "id": "uno", "top": -9, "left": -39, "attrs": {} },
+    {
+      "type": "wokwi-pushbutton-6mm",
+      "id": "btn1",
+      "top": -162.7,
+      "left": -16.1,
+      "rotate": 90,
+      "attrs": { "color": "green", "xray": "1" }
+    },
+    {
+      "type": "wokwi-pushbutton-6mm",
+      "id": "btn2",
+      "top": -162.7,
+      "left": 12.7,
+      "rotate": 90,
+      "attrs": { "color": "green", "xray": "1" }
+    },
+    {
+      "type": "wokwi-pushbutton-6mm",
+      "id": "btn3",
+      "top": -162.7,
+      "left": 41.5,
+      "rotate": 90,
+      "attrs": { "color": "green", "xray": "1" }
+    },
+    {
+      "type": "wokwi-pushbutton-6mm",
+      "id": "btn4",
+      "top": -162.7,
+      "left": 70.3,
+      "rotate": 90,
+      "attrs": { "color": "green", "xray": "1" }
+    },
+    {
+      "type": "wokwi-pushbutton-6mm",
+      "id": "btn5",
+      "top": -162.7,
+      "left": 99.1,
+      "rotate": 90,
+      "attrs": { "color": "green", "xray": "1" }
+    },
+    {
+      "type": "wokwi-pushbutton-6mm",
+      "id": "btn6",
+      "top": -162.7,
+      "left": 127.9,
+      "rotate": 90,
+      "attrs": { "color": "green", "xray": "1" }
+    },
+    {
+      "type": "wokwi-pushbutton-6mm",
+      "id": "btn7",
+      "top": -162.7,
+      "left": 156.7,
+      "rotate": 90,
+      "attrs": { "color": "green", "xray": "1" }
+    },
+    {
+      "type": "wokwi-pushbutton-6mm",
+      "id": "btnSub",
+      "top": -162.7,
+      "left": 200,
+      "rotate": 90,
+      "attrs": { "color": "red", "xray": "1" }
+    },
+    {
+      "type": "wokwi-pushbutton-6mm",
+      "id": "btnTime",
+      "top": -162.7,
+      "left": 228.8,
+      "rotate": 90,
+      "attrs": { "color": "red", "xray": "1" }
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd1",
+      "top": 200,
+      "left": 0,
+      "attrs": { "pins": "i2c" }
+    }
+  ],
+  "connections": [
+    [ "uno:6", "btn1:1.r", "green", [] ],
+    [ "btn1:2.l", "uno:GND.3", "black", [] ],
+    [ "uno:7", "btn2:1.r", "green", [] ],
+    [ "btn2:2.l", "uno:GND.3", "black", [] ],
+    [ "uno:8", "btn3:1.r", "green", [] ],
+    [ "btn3:2.l", "uno:GND.3", "black", [] ],
+    [ "uno:9", "btn4:1.r", "green", [] ],
+    [ "btn4:2.l", "uno:GND.3", "black", [] ],
+    [ "uno:10", "btn5:1.r", "green", [] ],
+    [ "btn5:2.l", "uno:GND.3", "black", [] ],
+    [ "uno:11", "btn6:1.r", "green", [] ],
+    [ "btn6:2.l", "uno:GND.3", "black", [] ],
+    [ "uno:12", "btn7:1.r", "green", [] ],
+    [ "btn7:2.l", "uno:GND.3", "black", [] ],
+    [ "uno:3", "btnSub:1.r", "red", [] ],
+    [ "btnSub:2.l", "uno:GND.3", "black", [] ],
+    [ "uno:4", "btnTime:1.r", "red", [] ],
+    [ "btnTime:2.l", "uno:GND.3", "black", [] ],
+    [ "lcd1:GND", "uno:GND.1", "black", [] ],
+    [ "lcd1:VCC", "uno:5V", "red", [] ],
+    [ "lcd1:SDA", "uno:A4", "blue", [] ],
+    [ "lcd1:SCL", "uno:A5", "purple", [] ]
+  ],
+  "dependencies": {}
+}
