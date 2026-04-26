@@ -82,6 +82,20 @@
       "top": 200,
       "left": 0,
       "attrs": { "pins": "i2c" }
+    },
+    {
+    "type": "wokwi-ds1307",
+    "id": "rtc1",
+    "top": 200,
+    "left": 300,
+    "attrs": {}
+    },
+    {
+    "type": "wokwi-stepper-motor",
+    "id": "stepper1",
+    "top": 300,
+    "left": 300,
+    "attrs": { "display": "steps" }
     }
   ],
   "connections": [
@@ -106,7 +120,15 @@
     [ "lcd1:GND", "uno:GND.1", "black", [] ],
     [ "lcd1:VCC", "uno:5V", "red", [] ],
     [ "lcd1:SDA", "uno:A4", "blue", [] ],
-    [ "lcd1:SCL", "uno:A5", "purple", [] ]
+    [ "lcd1:SCL", "uno:A5", "purple", [] ],
+    [ "rtc1:GND", "uno:GND.1", "black", [] ],
+    [ "rtc1:5V", "uno:5V", "red", [] ],
+    [ "rtc1:SDA", "uno:A4", "blue", [] ],
+    [ "rtc1:SCL", "uno:A5", "purple", [] ],
+    [ "stepper1:A-", "uno:2", "orange", [] ],
+    [ "stepper1:A+", "uno:A0", "yellow", [] ],
+    [ "stepper1:B-", "uno:5", "orange", [] ],
+    [ "stepper1:B+", "uno:A1", "yellow", [] ]
   ],
   "dependencies": {}
 }

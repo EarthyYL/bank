@@ -2,38 +2,47 @@
 #include <LiquidCrystal_I2C.h>
 #include <EEPROM.h>
 #include <RTClib.h>
+#include <Stepper.h>
+#define STEPS_PER_REV 2048
+
 
 // EEPROM addresses
 #define BALANCE_ADDR 0 
 #define TIME_ADDR    4 
 #define SHIFT_COUNT_ADDR 8 
-#define SHIFTS_START_ADDR 10
+#define TIMESTAMP_ADDR 10
+#define SHIFTS_START_ADDR 14
 
 // CURRENT EEPROM ALLOCATION:
 // 0-3: balance (long, 4 bytes)
 // 4-7: timeBalance (long, 4 bytes)
 // 8-9: shiftCount (int, 2 bytes)
-// 10-609: shift (struct (3 longs), 12 bytes, 50 entries allocated)
-// 610-1023: unused (414 bytes free)
+// 10-13: last seen timestamp (long, 4 bytes)
+// 14-613: shifts (struct (3 longs), 12 bytes, 50 entries allocated)
+// 614-1023: unused (410 bytes free)
 
 #define MAX_SHIFTS 50
 #define DEBOUNCE_MS 50
+#define STEPS_PER_REV 2048 // 0.176 degrees per step for 28BYJ-48 stepper motor
+#define STEP_INTERVAL_US 1757813UL // step inteval in microseconds for 1 hour per revolution
 
-
-// create objects to represent LCD and RTC modules, with appropriate parameters and I2C addresses
+// create objects to represent LCD, RTC, stepper modules, with appropriate parameters and I2C addresses
 LiquidCrystal_I2C lcd(0x27, 16, 2); 
 RTC_DS3231 rtc;
+Stepper motor(STEPS_PER_REV, 2, A0, 5, A1); // pins for ULN2003
 
 // custom struct for shift data to be stored in EEPROM
 struct Shift {
   long balance;
   long time;
-  long timestamp;
+  unsigned long timestamp;
 };
+
 
 
 long balance = 0; // long: 4-byte integer (up to +- 2 million)
 long timeBalance = 0;
+unsigned long lastSeenTime = 0;
 int button1 = 6;
 int button2 = 7;
 int button3 = 8;
@@ -52,11 +61,13 @@ bool lastState6 = HIGH;
 bool lastState7 = HIGH;
 bool lastStateSubToggle = HIGH;
 bool lastStateTimeToggle = HIGH;
+unsigned long lastStepTime = 0;
 bool useTime = false;       
 bool useSubtract = false;
 int shiftCount = 0;
 
 bool onPress(int pin, bool &last);
+unsigned long timeDiff();
 void waitRelease(int pin, bool &last);
 void increment(long &target, int value);
 void toggle(bool &flag);
@@ -64,7 +75,7 @@ void saveState();
 void loadState();
 void updateDisplay();
 void saveShift();
-
+void debugEEPROM();
 
 void setup() {
   pinMode(button1, INPUT_PULLUP); // pull-up resistor logic - HIGH when not pressed, LOW when pressed
@@ -92,6 +103,15 @@ void setup() {
 
   // COMMENT THIS OUT TO AVOID RESETTING TIME EVERY TIME YOU UPLOAD NEW CODE
   rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); // set RTC to compile time - only needs to be done once
+
+  motor.setSpeed(1); // low speed, doesn't matter since we're stepping manually
+
+  unsigned long timeCatchup = timeDiff(); // initialize timeCatchup to account for time passed while device was off
+  timeCatchup *= 1000; // convert to microseconds
+  unsigned long stepCatchup = timeCatchup / STEP_INTERVAL_US; // calculate how many steps we need to catch up on startup
+  motor.step(stepCatchup); // catch up on steps missed while off
+
+  debugEEPROM(); // print EEPROM values to serial for debugging - comment out in production
 }
 
 void loop() {
@@ -151,6 +171,15 @@ void loop() {
     toggle(useTime);
     waitRelease(buttonTimeToggle, lastStateTimeToggle);
   }
+
+
+
+  // stepper motor control block - ticks after a time interval
+  // one rotation per hour, one step per 1.757 seconds
+  if (micros() - lastStepTime >= STEP_INTERVAL_US) {
+  motor.step(1);
+  lastStepTime += STEP_INTERVAL_US; // increment last step time by interval directly, avoiding drift
+}
 }
 
 
@@ -198,6 +227,7 @@ void loadState() {
   EEPROM.get(BALANCE_ADDR, balance);
   EEPROM.get(TIME_ADDR, timeBalance);
   EEPROM.get(SHIFT_COUNT_ADDR, shiftCount);
+  EEPROM.get(TIMESTAMP_ADDR,lastSeenTime);
 
   // sanity checks - uninitalized EEPROM may contain garbage values, so we set any out-of-range values to 0 to prevent issues
   if (balance < 0) {
@@ -303,5 +333,47 @@ void saveShift() {
     lastStateSubToggle = digitalRead(buttonSubToggle);
     lastStateTimeToggle = digitalRead(buttonTimeToggle);
   }
+}
 
+unsigned long timeDiff() {
+  /// Calculate difference between current time and last seen time.
+  DateTime now = rtc.now();
+  return now.unixtime() - lastSeenTime;
+
+}
+
+
+void debugEEPROM() {
+  Serial.println("--- EEPROM DUMP ---");
+  Serial.print("Balance: ");
+  Serial.println(balance);
+  Serial.print("Time: ");
+  Serial.println(timeBalance);
+  Serial.print("Shift Count: ");
+  Serial.println(shiftCount);
+
+  for (int i = 0; i < shiftCount; i++) {
+    Shift s;
+    EEPROM.get(SHIFTS_START_ADDR + i * sizeof(Shift), s);
+    DateTime dt(s.timestamp);
+
+    Serial.print("Shift ");
+    Serial.print(i);
+    Serial.print(": $");
+    Serial.print(s.balance / 100);
+    Serial.print(".");
+    if (s.balance % 100 < 10) Serial.print("0");
+    Serial.print(s.balance % 100);
+    Serial.print(" | ");
+    Serial.print(s.time / 60);
+    Serial.print("h ");
+    Serial.print(s.time % 60);
+    Serial.print("m | ");
+    Serial.print(dt.month());
+    Serial.print("/");
+    Serial.print(dt.day());
+    Serial.print("/");
+    Serial.println(dt.year());
+  }
+  Serial.println("--- END DUMP ---");
 }
