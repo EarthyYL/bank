@@ -3,8 +3,6 @@
 #include <EEPROM.h>
 #include <RTClib.h>
 #include <Stepper.h>
-#define STEPS_PER_REV 2048
-
 
 // EEPROM addresses
 #define BALANCE_ADDR 0 
@@ -17,7 +15,7 @@
 // 0-3: balance (long, 4 bytes)
 // 4-7: timeBalance (long, 4 bytes)
 // 8-9: shiftCount (int, 2 bytes)
-// 10-13: last seen timestamp (long, 4 bytes)
+// 10-13: last seen timestamp (unsigned long, 4 bytes)
 // 14-613: shifts (struct (3 longs), 12 bytes, 50 entries allocated)
 // 614-1023: unused (410 bytes free)
 
@@ -73,9 +71,11 @@ void increment(long &target, int value);
 void toggle(bool &flag);
 void saveState();
 void loadState();
-void updateDisplay();
+void defaultDisplay();
 void saveShift();
+void reviewShifts();
 void debugEEPROM();
+void loadTestShifts();
 
 void setup() {
   pinMode(button1, INPUT_PULLUP); // pull-up resistor logic - HIGH when not pressed, LOW when pressed
@@ -91,24 +91,24 @@ void setup() {
 
   Serial.begin(9600);
 
-  loadState(); // grab memory of values before we begin
-
-  // initalize LCD display
-  lcd.init();
-  lcd.backlight();
-  updateDisplay(); // initial display update to show loaded values
-
   // initalize RTC
   rtc.begin();
 
   // COMMENT THIS OUT TO AVOID RESETTING TIME EVERY TIME YOU UPLOAD NEW CODE
-  rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); // set RTC to compile time - only needs to be done once
+  rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); // set RTC to compile time - only needs to be done once.
 
+  loadState(); // grab values of stored vars before we begin - next two initalizations use them
+  loadTestShifts(); // load test shifts for debugging - comment out in prod
+
+  // initalize LCD display
+  lcd.init();
+  lcd.backlight();
+  defaultDisplay(); // initial display update to show loaded values
+
+  // initalize stepper motor
   motor.setSpeed(1); // low speed, doesn't matter since we're stepping manually
-
-  unsigned long timeCatchup = timeDiff(); // initialize timeCatchup to account for time passed while device was off
-  timeCatchup *= 1000; // convert to microseconds
-  unsigned long stepCatchup = timeCatchup / STEP_INTERVAL_US; // calculate how many steps we need to catch up on startup
+  unsigned long offSeconds = timeDiff(); // grab time since device was last on
+  unsigned long stepCatchup = (offSeconds * STEPS_PER_REV) / 3600UL; // calculate how many steps we need to catch up
   motor.step(stepCatchup); // catch up on steps missed while off
 
   debugEEPROM(); // print EEPROM values to serial for debugging - comment out in production
@@ -123,7 +123,7 @@ void loop() {
   // 1. check for press event (edge detection)
   // 2. call action functions
   // 3. wait for release and handle debouncing
-
+ 
   if (onPress(button1, lastState1)) {
     increment(target, useTime ? 15 : 1); // increment by 15 minutes or $0.01 depending on mode
     waitRelease(button1, lastState1);
@@ -155,11 +155,34 @@ void loop() {
       increment(balance, 10000); // $100.00
       waitRelease(button7, lastState7);
     }
+
   }else {
     // time mode special functions for buttons 4-7
     if (onPress(button4, lastState4)) { 
       saveShift(); // complicated function, described in its own definition below
       waitRelease(button4, lastState4);
+    }
+    if (onPress(button5, lastState5)) {
+      waitRelease(button5, lastState5); 
+      reviewShifts(); // also complicated, described in its own definition below
+    }
+    if (onPress(button6, lastState6)) { 
+      waitRelease(button6, lastState6);
+      // calculate and display hourly wage based on current balance and time, with appropriate formatting
+      lcd.clear();
+      if (timeBalance == 0) {
+        lcd.print("No time worked");
+        delay(3000);
+        defaultDisplay();
+      } 
+      else {
+        long wage = (balance * 60) / timeBalance; // cents per hour, timeBalance in minutes
+        char line1[17];
+        snprintf(line1,17, "Wage: $%ld.%02ld/hr", wage / 100, wage % 100);
+        lcd.print(line1);
+        delay(3000);
+        defaultDisplay();
+      }
     }
   }
 
@@ -173,18 +196,17 @@ void loop() {
   }
 
 
-
-  // stepper motor control block - ticks after a time interval
+  // STEPPER MOTOR CONTROL BLOCK
   // one rotation per hour, one step per 1.757 seconds
   if (micros() - lastStepTime >= STEP_INTERVAL_US) {
   motor.step(1);
-  lastStepTime += STEP_INTERVAL_US; // increment last step time by interval directly, avoiding drift
-}
+  lastStepTime += STEP_INTERVAL_US; // increment last step time by interval directly, avoiding drift. will also catchup on missed steps if the loop is busy for a while (when awaiting user input)
+  }
 }
 
 
 bool onPress(int pin, bool &last) { 
-  /// Return true when button is pressed to trigger actions in loop
+  /// Return true when button is pressed to trigger actions in loop and update last state
   bool current = digitalRead(pin);
   if (current == LOW && last == HIGH) { // edge detection for press
     return true;
@@ -207,19 +229,21 @@ void increment(long &target, int value) {
   target += useSubtract ? -value : value; 
   if (target < 0) target = 0; // prevent negative values
   saveState(); // save new value to EEPROM after every change
-  updateDisplay(); // refresh display to show new value
+  defaultDisplay(); // refresh display to show new value
 }
 
 void toggle(bool &flag) {
   /// Toggle a boolean flag and refresh display.
   flag = !flag;
-  updateDisplay();
+  defaultDisplay();
 }
 
 void saveState() { 
   /// Save state of counters into EEPROM.
   EEPROM.put(BALANCE_ADDR, balance); // EEPROM.put only writes when value has changed 
   EEPROM.put(TIME_ADDR, timeBalance); // this helps reduce likelihood of reaching the rated 100000 write cycles
+  lastSeenTime = rtc.now().unixtime();
+  EEPROM.put(TIMESTAMP_ADDR, lastSeenTime); // update last seen time as unixtime
 }
 
 void loadState() { 
@@ -242,10 +266,21 @@ void loadState() {
     shiftCount = 0;
     EEPROM.put(SHIFT_COUNT_ADDR, shiftCount);
   }
+  if (lastSeenTime == 0xFFFFFFFF) { // expected value on first boot with blank EEPROM
+  lastSeenTime = rtc.now().unixtime();
+  EEPROM.put(TIMESTAMP_ADDR, lastSeenTime);
+  }
+  if (lastSeenTime> rtc.now().unixtime()) {
+    // handles future timestamps - causes overflow in the unsigned long and results in stepper motor spinning wildly
+    // encountered in Wokwi because I cannot comment out rtc.adjust() without recompiling
+    // should work fine IRL in real life since rtc.adjust() only needs to be done once and can be commented out after initial setup
+    lastSeenTime = rtc.now().unixtime();
+    EEPROM.put(TIMESTAMP_ADDR, lastSeenTime);
+  }
 
 }
 
-void updateDisplay() {
+void defaultDisplay() {
 // LCD display update function - called after every state change to reflect new values
 // Only for standard display - other screens handeled in other functions
   lcd.clear();
@@ -268,8 +303,8 @@ void updateDisplay() {
 }
 
 void saveShift() {
-  // Prompt user to save shift. Write appropiate data to EEPROM if they confirm.
-
+  // Prompt user to save shift. Write appropiate data to EEPROM if they confirm. Trigger by TIME4.
+    lastState4 = HIGH; 
   // confirm/cancel prompt
   lcd.clear();
   lcd.print("+/-: Confirm");
@@ -288,7 +323,7 @@ void saveShift() {
         lcd.clear();
         lcd.print("Memory full!");
         delay(2500);
-        updateDisplay(); // return to main display and exit function
+        defaultDisplay(); // return to main display and exit function
         return;
       }
 
@@ -312,7 +347,7 @@ void saveShift() {
       delay(2500);
 
       // refresh display and leave function
-      updateDisplay();
+      defaultDisplay();
       return;
     }
 
@@ -326,12 +361,85 @@ void saveShift() {
       delay(2500);
 
       // refresh and exit
-      updateDisplay();
+      defaultDisplay();
       return;
     }
     // still in while loop - update last states for toggle button before next iteration
     lastStateSubToggle = digitalRead(buttonSubToggle);
     lastStateTimeToggle = digitalRead(buttonTimeToggle);
+  }
+}
+
+void reviewShifts() {
+  /// Review past shifts stored in EEPROM. Triggered by TIME5.
+  
+  lastState5 = LOW; // force button state to low to avoid triggering the button press logic instantly
+
+  // early exit for no shifts case
+  if (shiftCount == 0) {
+    lcd.clear();
+    lcd.print("No shifts saved");
+    delay(2000);
+    defaultDisplay();
+    return;
+  }
+
+  int index = shiftCount - 1; // start at most recent 
+
+  // Looping block for reviewing shifts
+  while (true) { 
+    Shift s;
+    EEPROM.get(SHIFTS_START_ADDR + index * sizeof(Shift), s); // pull shift data from EEPROM for current index, write into variable 
+    DateTime dt(s.timestamp); // grab timestamp for shift
+
+    // PRINTOUT BLOCK (constantly refreshed)
+    char line1[17]; // 16 chars + null terminator for LCD display
+    char line2[17];
+    snprintf(line1,17, "$%ld.%02ld %ldh%ldm", //"$X.XX YhZm"
+      s.balance / 100, s.balance % 100, s.time / 60, s.time % 60);
+    snprintf(line2,17, "%d/%d/%d #%d/%d", //"M/D/Y INDEX/TOTAL"
+       dt.month(), dt.day(), dt.year() % 100, index + 1, shiftCount);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(line1);
+    lcd.setCursor(0, 1);
+    lcd.print(line2);
+
+    // INPUT PROCESSING BLOCK
+    while (true) {
+      // button5: previous shift
+      if (onPress(button5, lastState5)) {
+        waitRelease(button5, lastState5);
+        index--; // move to previous shift
+        if (index < 0) index = shiftCount - 1; // wrap around
+        break;
+      }
+
+      // button6: hourly wage calculation
+      if (onPress(button6,lastState6)){
+        waitRelease(button6, lastState6);
+        lcd.clear();
+        if (s.time == 0) {
+          lcd.print("No time worked");
+          delay(3000);
+          break; // return to shift review after message display
+        } 
+        else {
+          long wage = (s.balance * 60) / s.time; // cents per hour, s.time in minutes
+          snprintf(line1,17, "Wage: $%ld.%02ld/hr", wage / 100, wage % 100);
+          lcd.print(line1);
+          delay(3000);
+          break; // return to shift review after wage display
+        }
+      }
+
+      // time button - exit review mode
+      if (onPress(buttonTimeToggle, lastStateTimeToggle)) {
+        waitRelease(buttonTimeToggle, lastStateTimeToggle);
+        defaultDisplay();
+        return; // leave the function and return to main display
+      }
+    }
   }
 }
 
@@ -376,4 +484,21 @@ void debugEEPROM() {
     Serial.println(dt.year());
   }
   Serial.println("--- END DUMP ---");
+}
+
+void loadTestShifts() {
+  Shift testShifts[] = {
+    { 4500,  480, 1714000000UL },  // $45.00, 8h, Apr 2024
+    { 7225,  540, 1714100000UL },  // $72.25, 9h, Apr 2024
+    { 3000,  360, 1714200000UL },  // $30.00, 6h, Apr 2024
+    { 12050, 600, 1714300000UL },  // $120.50, 10h, Apr 2024
+    { 0,     0,   1714400000UL },  // empty shift, edge case
+  };
+
+  shiftCount = 5;
+  EEPROM.put(SHIFT_COUNT_ADDR, shiftCount);
+
+  for (int i = 0; i < shiftCount; i++) {
+    EEPROM.put(SHIFTS_START_ADDR + i * sizeof(Shift), testShifts[i]);
+  }
 }
