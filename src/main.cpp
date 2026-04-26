@@ -117,6 +117,8 @@ void setup() {
 }
 
 void loop() {
+  // Default display and counter update block - most button actions are handled here
+
   // determine target counter based on mode.
   // declare as an alias reference to point back to actual counters
   long &target = useTime ? timeBalance : balance; 
@@ -186,8 +188,29 @@ void loop() {
         defaultDisplay();
       }
     }
+    // ask user to reset their shift (new shift without saving to memory)
+    if (onPress(button7, lastState7)) { 
+      waitRelease(button7, lastState7);
+      // confirmation block
+      if (confirmDialog("Reset shift?")) {
+        balance = 0;
+        timeBalance = 0;
+        saveState(); // save reset state to EEPROM
+        lcd.clear();
+        lcd.print("Shift reset!");
+        delay(2500);
+        defaultDisplay();
+      }
+      // cancellation block
+      else {
+        // cancellation printout
+        lcd.clear();
+        lcd.print("Cancelled");
+        delay(2500);
+        defaultDisplay();
+      }
+    }
   }
-
   if (onPress(buttonSubToggle, lastStateSubToggle)) { // toggle subtract mode
     toggle(useSubtract);
     waitRelease(buttonSubToggle, lastStateSubToggle);
@@ -530,6 +553,12 @@ void debugEEPROM() {
 }
 
 void loadTestShifts() {
+  int testDataMarker;
+  EEPROM.get(1000, testDataMarker);
+  if (testDataMarker == 1) {
+    // test data already loaded, do not reload
+    return;
+  }
   Shift testShifts[] = {
     { 4500,  480, 1714000000UL },  // $45.00, 8h, Apr 2024
     { 7225,  540, 1714100000UL },  // $72.25, 9h, Apr 2024
@@ -544,4 +573,6 @@ void loadTestShifts() {
   for (int i = 0; i < shiftCount; i++) {
     EEPROM.put(SHIFTS_START_ADDR + i * sizeof(Shift), testShifts[i]);
   }
+
+  EEPROM.put(1000, 1); // marker to indicate test shifts have been loaded
 }
