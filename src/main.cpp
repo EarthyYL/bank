@@ -10,14 +10,13 @@
 #define SHIFT_COUNT_ADDR 8 
 #define TIMESTAMP_ADDR 10
 #define SHIFTS_START_ADDR 14
-
 // CURRENT EEPROM ALLOCATION:
 // 0-3: balance (long, 4 bytes)
 // 4-7: timeBalance (long, 4 bytes)
 // 8-9: shiftCount (int, 2 bytes)
 // 10-13: last seen timestamp (unsigned long, 4 bytes)
 // 14-613: shifts (struct (3 longs), 12 bytes, 50 entries allocated)
-// 614-1023: unused (410 bytes free)
+// 614-1023: unused (410 bytes free) (test marker stored at 1000/1001 for debugging)
 
 #define MAX_SHIFTS 50
 #define DEBOUNCE_MS 50
@@ -27,7 +26,7 @@
 // create objects to represent LCD, RTC, stepper modules, with appropriate parameters and I2C addresses
 LiquidCrystal_I2C lcd(0x27, 16, 2); 
 RTC_DS3231 rtc;
-Stepper motor(STEPS_PER_REV, 2, A0, 5, A1); // pins for ULN2003
+Stepper motor(STEPS_PER_REV, 2, A0, 3, A1); // pins for ULN2003
 
 // custom struct for shift data to be stored in EEPROM
 struct Shift {
@@ -36,11 +35,6 @@ struct Shift {
   unsigned long timestamp;
 };
 
-
-
-long balance = 0; // long: 4-byte integer (up to +- 2 million)
-long timeBalance = 0;
-unsigned long lastSeenTime = 0;
 int button1 = 6;
 int button2 = 7;
 int button3 = 8;
@@ -48,8 +42,25 @@ int button4 = 9;
 int button5 = 10;
 int button6 = 11;
 int button7 = 12;
-int buttonSubToggle = 3;
-int buttonTimeToggle = 4;
+int buttonSubToggle = 4;
+int buttonTimeToggle = 5;
+int subtractLED = A2;
+int timeLED = A3;
+
+// PINOUT:
+// D0/D1: Serial TX/RX pins 
+// D2/D3: Stepper motor control pins
+// D4: Subtract mode toggle button
+// D5: Time mode toggle button
+// D6-D12: Increment buttons
+// D13: Do not use - connected to onboard LED, may cause issues if used as button pin
+// A0/A1: Stepper motor control pins
+// A2: Subtract mode LED
+// A3: Time mode LED
+// A4/A5: RTC SDA/SCL pins, LCD SDA/SCL pins (shared I2C bus)
+
+
+// global declarations for counters, mode flags, and time tracking
 bool lastState1 = HIGH;
 bool lastState2 = HIGH;
 bool lastState3 = HIGH;
@@ -59,10 +70,15 @@ bool lastState6 = HIGH;
 bool lastState7 = HIGH;
 bool lastStateSubToggle = HIGH;
 bool lastStateTimeToggle = HIGH;
+unsigned long lastSeenTime = 0;
 unsigned long lastStepTime = 0;
 bool useTime = false;       
 bool useSubtract = false;
 int shiftCount = 0;
+long balance = 0;
+long timeBalance = 0;
+
+// forward function declarations
 
 bool onPress(int pin, bool &last);
 unsigned long timeDiff();
@@ -89,7 +105,8 @@ void setup() {
   pinMode(button7, INPUT_PULLUP);
   pinMode(buttonSubToggle, INPUT_PULLUP);
   pinMode(buttonTimeToggle, INPUT_PULLUP);
-
+  pinMode(subtractLED, OUTPUT);
+  pinMode(timeLED, OUTPUT);
 
   Serial.begin(9600);
 
@@ -229,9 +246,11 @@ void loop() {
   }
 }
 
-
+/// @brief Check if a button is pressed and update last state for edge detection. Should be called in a loop for constant monitoring of button state.
+/// @param pin Digital pin corresponding to checked button.
+/// @param last Reference to the last known button state.
+/// @return True if button is pressed, false otherwise.
 bool onPress(int pin, bool &last) { 
-  /// Return true when button is pressed to trigger actions in loop and update last state
   bool current = digitalRead(pin);
   if (current == LOW && last == HIGH) { // edge detection for press
     return true;
@@ -240,39 +259,45 @@ bool onPress(int pin, bool &last) {
   return false;
 }
 
+/// @brief Wait for button release and handle debouncing.
+/// @param pin The digital pin to monitor.
+/// @param last Reference to the last known button state.
 void waitRelease(int pin, bool &last) {
-  /// Wait for button release and handle debouncing. Called after a button press is detected
   delay(DEBOUNCE_MS);
   while (digitalRead(pin) == LOW); // wait for button release
   delay(DEBOUNCE_MS);
   last = HIGH; // force update of last state to HIGH, just in case of debounce oddities
 }
 
-
+/// @brief Increment or decrement target counter by given value.
+/// @param target Reference to the target counter.
+/// @param value Value to increment or decrement by.
 void increment(long &target, int value) {
-  /// Increment or decrement target counter by given value.
   target += useSubtract ? -value : value; 
   if (target < 0) target = 0; // prevent negative values
   saveState(); // save new value to EEPROM after every change
   defaultDisplay(); // refresh display to show new value
 }
 
+/// @brief Toggle a boolean flag and update associated LED states.
+/// @param flag Reference to toggled flag.
 void toggle(bool &flag) {
-  /// Toggle a boolean flag and refresh display.
   flag = !flag;
+  digitalWrite(subtractLED, useSubtract); // should autocast bool to HIGH/LOW
+  digitalWrite(timeLED, useTime);
   defaultDisplay();
 }
 
+/// @brief Save state of counters into EEPROM.
 void saveState() { 
-  /// Save state of counters into EEPROM.
   EEPROM.put(BALANCE_ADDR, balance); // EEPROM.put only writes when value has changed 
   EEPROM.put(TIME_ADDR, timeBalance); // this helps reduce likelihood of reaching the rated 100000 write cycles
   lastSeenTime = rtc.now().unixtime();
   EEPROM.put(TIMESTAMP_ADDR, lastSeenTime); // update last seen time as unixtime
 }
 
+/// @brief Load state from EEPROM into variables.
 void loadState() { 
-  /// Load state from EEPROM into variables.
   EEPROM.get(BALANCE_ADDR, balance);
   EEPROM.get(TIME_ADDR, timeBalance);
   EEPROM.get(SHIFT_COUNT_ADDR, shiftCount);
@@ -304,10 +329,8 @@ void loadState() {
   }
 
 }
-
+/// @brief Refresh and display default screen. Should be called after any action that changes shift counters.
 void defaultDisplay() {
-// LCD display update function - called after every state change to reflect new values
-// Only for standard display - other screens handeled in other functions
   lcd.clear();
   lcd.setCursor(0, 0);
   if (useTime) {
@@ -327,6 +350,9 @@ void defaultDisplay() {
   if (useSubtract) lcd.print("SUBTRACT");
 }
 
+/// @brief Display a confirmation dialog on the LCD display. "+/-" to confirm, "time" to cancel.
+/// @param prompt Prompt appearing above confirmation options. 16 char limit.
+/// @return True if confirmed, false if cancelled
 bool confirmDialog(const char* prompt) {
   lcd.clear();
   lcd.print(prompt);
@@ -346,9 +372,8 @@ bool confirmDialog(const char* prompt) {
   }
 }
 
-
+/// @brief Prompt user to save shift. Write appropiate data to EEPROM if they confirm. Triggered by TIME4.
 void saveShift() {
-  // Prompt user to save shift. Write appropiate data to EEPROM if they confirm. Trigger by TIME4.
   // confirm/cancel prompt:
 
   if (confirmDialog("Save shift?")) { // CONFIRMATION BLOCK     
@@ -400,9 +425,8 @@ void saveShift() {
     }
   }
 
-
+/// @brief Review past shifts stored in EEPROM. Triggered by TIME5.
 void shiftReviewMode() {
-  /// Review past shifts stored in EEPROM. Triggered by TIME5.
   
   // early exit for no shifts case
   if (shiftCount == 0) {
@@ -496,15 +520,15 @@ void shiftReviewMode() {
   }
 }
 
+/// @brief Calculate difference between current time and last seen time.
+/// @return Difference in seconds.
 unsigned long timeDiff() {
-  /// Calculate difference between current time and last seen time.
-  DateTime now = rtc.now();
-  return now.unixtime() - lastSeenTime;
-
+  return rtc.now().unixtime() - lastSeenTime;
 }
 
+/// @brief Delete a shift at given index by rewriting subsequent shifts over it. Adjust shift count accordingly.
+/// @param index Index of shift to delete
 void deleteShift(int index) {
-  /// Delete a shift at given index by rewriting subsequent shifts over it. Adjust shift count accordingly.
   for (int i = index; i < shiftCount - 1; i++) {
     Shift s;
     EEPROM.get(SHIFTS_START_ADDR + (i + 1) * sizeof(Shift), s);
@@ -514,9 +538,7 @@ void deleteShift(int index) {
   EEPROM.put(SHIFT_COUNT_ADDR, shiftCount);
 }
 
-
-
-
+/// @brief Dump EEPROM contents to serial monitor.
 void debugEEPROM() {
   Serial.println("--- EEPROM DUMP ---");
   Serial.print("Balance: ");
@@ -552,6 +574,7 @@ void debugEEPROM() {
   Serial.println("--- END DUMP ---");
 }
 
+/// @brief Upload test shifts for debugging in EEPROM. Only loads once.
 void loadTestShifts() {
   int testDataMarker;
   EEPROM.get(1000, testDataMarker);
@@ -560,14 +583,59 @@ void loadTestShifts() {
     return;
   }
   Shift testShifts[] = {
-    { 4500,  480, 1714000000UL },  // $45.00, 8h, Apr 2024
-    { 7225,  540, 1714100000UL },  // $72.25, 9h, Apr 2024
-    { 3000,  360, 1714200000UL },  // $30.00, 6h, Apr 2024
-    { 12050, 600, 1714300000UL },  // $120.50, 10h, Apr 2024
-    { 0,     0,   1714400000UL },  // empty shift, edge case
+    { 7200,  480, 1735776000UL },  // $72.00, 8h, Jan 1 2025
+    { 5400,  360, 1736467200UL },  // $54.00, 6h, Jan 9
+    { 9600,  540, 1737072000UL },  // $96.00, 9h, Jan 16
+    { 4800,  300, 1737763200UL },  // $48.00, 5h, Jan 24
+    { 10800, 600, 1738368000UL },  // $108.00, 10h, Feb 1
+    { 6000,  420, 1739059200UL },  // $60.00, 7h, Feb 8
+    { 8400,  480, 1739664000UL },  // $84.00, 8h, Feb 15
+    { 11400, 660, 1740355200UL },  // $114.00, 11h, Feb 23
+    { 7800,  480, 1740960000UL },  // $78.00, 8h, Mar 2
+    { 5100,  300, 1741651200UL },  // $51.00, 5h, Mar 10
+    { 9000,  540, 1742256000UL },  // $90.00, 9h, Mar 17
+    { 6600,  420, 1742947200UL },  // $66.00, 7h, Mar 25
+    { 10200, 600, 1743552000UL },  // $102.00, 10h, Apr 1
+    { 4500,  300, 1744243200UL },  // $45.00, 5h, Apr 9
+    { 8700,  480, 1744848000UL },  // $87.00, 8h, Apr 16
+    { 12000, 720, 1745539200UL },  // $120.00, 12h, Apr 24
+    { 7500,  480, 1746144000UL },  // $75.00, 8h, May 1
+    { 5700,  360, 1746835200UL },  // $57.00, 6h, May 9
+    { 9300,  540, 1747440000UL },  // $93.00, 9h, May 16
+    { 6300,  420, 1748131200UL },  // $63.00, 7h, May 24
+    { 10500, 600, 1748736000UL },  // $105.00, 10h, Jun 1
+    { 4200,  240, 1749427200UL },  // $42.00, 4h, Jun 8
+    { 8100,  480, 1750032000UL },  // $81.00, 8h, Jun 15
+    { 11700, 660, 1750723200UL },  // $117.00, 11h, Jun 23
+    { 7350,  480, 1751328000UL },  // $73.50, 8h, Jun 30
+    { 5550,  360, 1752019200UL },  // $55.50, 6h, Jul 8
+    { 9900,  540, 1752624000UL },  // $99.00, 9h, Jul 15
+    { 6750,  420, 1753315200UL },  // $67.50, 7h, Jul 23
+    { 10050, 600, 1753920000UL },  // $100.50, 10h, Jul 30
+    { 4650,  300, 1754611200UL },  // $46.50, 5h, Aug 7
+    { 8850,  480, 1755216000UL },  // $88.50, 8h, Aug 14
+    { 11100, 660, 1755907200UL },  // $111.00, 11h, Aug 22
+    { 7050,  480, 1756512000UL },  // $70.50, 8h, Aug 29
+    { 5250,  360, 1757203200UL },  // $52.50, 6h, Sep 6
+    { 9450,  540, 1757808000UL },  // $94.50, 9h, Sep 13
+    { 6450,  420, 1758499200UL },  // $64.50, 7h, Sep 21
+    { 10350, 600, 1759104000UL },  // $103.50, 10h, Sep 28
+    { 4350,  300, 1759795200UL },  // $43.50, 5h, Oct 6
+    { 8250,  480, 1760400000UL },  // $82.50, 8h, Oct 13
+    { 11850, 720, 1761091200UL },  // $118.50, 12h, Oct 21
+    { 7650,  480, 1761696000UL },  // $76.50, 8h, Oct 28
+    { 5850,  360, 1762387200UL },  // $58.50, 6h, Nov 5
+    { 9150,  540, 1762992000UL },  // $91.50, 9h, Nov 12
+    { 6150,  420, 1763683200UL },  // $61.50, 7h, Nov 20
+    { 10650, 600, 1764288000UL },  // $106.50, 10h, Nov 27
+    { 4950,  300, 1764979200UL },  // $49.50, 5h, Dec 5
+    { 8550,  480, 1765584000UL },  // $85.50, 8h, Dec 12
+    { 11550, 660, 1766275200UL },  // $115.50, 11h, Dec 20
+    { 7950,  480, 1767052800UL },  // $79.50, 8h, Jan 30 2026
+    { 6900,  420, 1769472000UL },  // $69.00, 7h, Mar 2 2026
   };
 
-  shiftCount = 5;
+  shiftCount = 50;
   EEPROM.put(SHIFT_COUNT_ADDR, shiftCount);
 
   for (int i = 0; i < shiftCount; i++) {

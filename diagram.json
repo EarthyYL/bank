@@ -96,6 +96,34 @@
     "top": 300,
     "left": 300,
     "attrs": { "display": "steps" }
+    },
+    {
+    "type": "wokwi-led",
+    "id": "ledSub",
+    "top": -200,
+    "left": 200,
+    "attrs": { "color": "red" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "rSub",
+      "top": -180,
+      "left": 200,
+      "attrs": { "value": "220" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "ledTime",
+      "top": -200,
+      "left": 240,
+      "attrs": { "color": "blue" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "rTime",
+      "top": -180,
+      "left": 240,
+      "attrs": { "value": "220" }
     }
   ],
   "connections": [
@@ -113,9 +141,9 @@
     [ "btn6:2.l", "uno:GND.3", "black", [] ],
     [ "uno:12", "btn7:1.r", "green", [] ],
     [ "btn7:2.l", "uno:GND.3", "black", [] ],
-    [ "uno:3", "btnSub:1.r", "red", [] ],
+    [ "uno:4", "btnSub:1.r", "red", [] ],
     [ "btnSub:2.l", "uno:GND.3", "black", [] ],
-    [ "uno:4", "btnTime:1.r", "red", [] ],
+    [ "uno:5", "btnTime:1.r", "red", [] ],
     [ "btnTime:2.l", "uno:GND.3", "black", [] ],
     [ "lcd1:GND", "uno:GND.1", "black", [] ],
     [ "lcd1:VCC", "uno:5V", "red", [] ],
@@ -127,8 +155,14 @@
     [ "rtc1:SCL", "uno:A5", "purple", [] ],
     [ "stepper1:A-", "uno:2", "orange", [] ],
     [ "stepper1:A+", "uno:A0", "yellow", [] ],
-    [ "stepper1:B-", "uno:5", "orange", [] ],
-    [ "stepper1:B+", "uno:A1", "yellow", [] ]
+    [ "stepper1:B-", "uno:3", "orange", [] ],
+    [ "stepper1:B+", "uno:A1", "yellow", [] ],
+    [ "uno:A2", "rSub:1", "green", [] ],
+    [ "rSub:2", "ledSub:A", "green", [] ],
+    [ "ledSub:C", "uno:GND.3", "black", [] ],
+    [ "uno:A3", "rTime:1", "blue", [] ],
+    [ "rTime:2", "ledTime:A", "blue", [] ],
+    [ "ledTime:C", "uno:GND.3", "black", [] ]
   ],
   "dependencies": {}
 }
