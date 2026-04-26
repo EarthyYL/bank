@@ -72,8 +72,10 @@ void toggle(bool &flag);
 void saveState();
 void loadState();
 void defaultDisplay();
+bool confirmDialog(const char *message);
 void saveShift();
-void reviewShifts();
+void deleteShift(int index);
+void shiftReviewMode();
 void debugEEPROM();
 void loadTestShifts();
 
@@ -164,7 +166,7 @@ void loop() {
     }
     if (onPress(button5, lastState5)) {
       waitRelease(button5, lastState5); 
-      reviewShifts(); // also complicated, described in its own definition below
+      shiftReviewMode(); // also complicated, described in its own definition below
     }
     if (onPress(button6, lastState6)) { 
       waitRelease(button6, lastState6);
@@ -302,26 +304,37 @@ void defaultDisplay() {
   if (useSubtract) lcd.print("SUBTRACT");
 }
 
-void saveShift() {
-  // Prompt user to save shift. Write appropiate data to EEPROM if they confirm. Trigger by TIME4.
-    lastState4 = HIGH; 
-  // confirm/cancel prompt
+bool confirmDialog(const char* prompt) {
   lcd.clear();
-  lcd.print("+/-: Confirm");
+  lcd.print(prompt);
   lcd.setCursor(0, 1);
-  lcd.print("Time: Cancel");
-  
-  // sit in loop until user makes a choice
-  while (true) {
+  lcd.print("+/-:Yes  Time:No");
 
-    // confirmation block - save shift and reset counters
+  // captive loop until user makes a choice, returns true for confirm and false for cancel
+  while (true) {
     if (onPress(buttonSubToggle, lastStateSubToggle)) {
       waitRelease(buttonSubToggle, lastStateSubToggle);
-      
+      return true;
+    }
+    if (onPress(buttonTimeToggle, lastStateTimeToggle)) {
+      waitRelease(buttonTimeToggle, lastStateTimeToggle);
+      return false;
+    }
+  }
+}
+
+
+void saveShift() {
+  // Prompt user to save shift. Write appropiate data to EEPROM if they confirm. Trigger by TIME4.
+  // confirm/cancel prompt:
+
+  if (confirmDialog("Save shift?")) { // CONFIRMATION BLOCK     
       // memory full check, printout and exit if appropiate
       if (shiftCount >= MAX_SHIFTS) {
         lcd.clear();
         lcd.print("Memory full!");
+        lcd.setCursor(0,1);
+        lcd.print("Delete old shifts");
         delay(2500);
         defaultDisplay(); // return to main display and exit function
         return;
@@ -351,10 +364,8 @@ void saveShift() {
       return;
     }
 
-    // cancellation block - just return to main display and exit function
-    if (onPress(buttonTimeToggle, lastStateTimeToggle)) {
-      waitRelease(buttonTimeToggle, lastStateTimeToggle);
-
+    // CANCELLATION BLOCK - just return to main display and exit function
+    else{
       // cancellation printout
       lcd.clear();
       lcd.print("Cancelled");
@@ -364,17 +375,12 @@ void saveShift() {
       defaultDisplay();
       return;
     }
-    // still in while loop - update last states for toggle button before next iteration
-    lastStateSubToggle = digitalRead(buttonSubToggle);
-    lastStateTimeToggle = digitalRead(buttonTimeToggle);
   }
-}
 
-void reviewShifts() {
+
+void shiftReviewMode() {
   /// Review past shifts stored in EEPROM. Triggered by TIME5.
   
-  lastState5 = LOW; // force button state to low to avoid triggering the button press logic instantly
-
   // early exit for no shifts case
   if (shiftCount == 0) {
     lcd.clear();
@@ -392,7 +398,7 @@ void reviewShifts() {
     EEPROM.get(SHIFTS_START_ADDR + index * sizeof(Shift), s); // pull shift data from EEPROM for current index, write into variable 
     DateTime dt(s.timestamp); // grab timestamp for shift
 
-    // PRINTOUT BLOCK (constantly refreshed)
+    // PRINTOUT BLOCK
     char line1[17]; // 16 chars + null terminator for LCD display
     char line2[17];
     snprintf(line1,17, "$%ld.%02ld %ldh%ldm", //"$X.XX YhZm"
@@ -432,7 +438,31 @@ void reviewShifts() {
           break; // return to shift review after wage display
         }
       }
-
+      // button7: delete shift from memory
+      if (onPress(button7, lastState7)) {
+        waitRelease(button7, lastState7);
+        if (confirmDialog("Delete shift?")) {
+          deleteShift(index); // delete shift at current index and update shift count/EEPROM accordingly
+          lcd.clear();
+          lcd.print("Shift deleted");
+          delay(2500);
+          if (shiftCount == 0) {
+            defaultDisplay();
+            return; // return to main display if no shifts remain after deletion
+          }
+          else {
+            if (index >= shiftCount) index = shiftCount - 1; // adjust index if the most recent shift was deleted
+            break; // back to review
+          }
+        }
+        else{
+          // cancellation printout
+          lcd.clear();
+          lcd.print("Cancelled");
+          delay(2500);
+          break; // return to shift review after cancellation
+        }
+      }
       // time button - exit review mode
       if (onPress(buttonTimeToggle, lastStateTimeToggle)) {
         waitRelease(buttonTimeToggle, lastStateTimeToggle);
@@ -449,6 +479,19 @@ unsigned long timeDiff() {
   return now.unixtime() - lastSeenTime;
 
 }
+
+void deleteShift(int index) {
+  /// Delete a shift at given index by rewriting subsequent shifts over it. Adjust shift count accordingly.
+  for (int i = index; i < shiftCount - 1; i++) {
+    Shift s;
+    EEPROM.get(SHIFTS_START_ADDR + (i + 1) * sizeof(Shift), s);
+    EEPROM.put(SHIFTS_START_ADDR + i * sizeof(Shift), s);
+  }
+  shiftCount--;
+  EEPROM.put(SHIFT_COUNT_ADDR, shiftCount);
+}
+
+
 
 
 void debugEEPROM() {
